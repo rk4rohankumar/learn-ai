@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SSE Chat Test Client</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --panel: #181b23;
+      --border: #2a2e3a;
+      --text: #e6e8ee;
+      --muted: #8b90a0;
+      --accent: #6c8cff;
+      --user: #223052;
+      --assistant: #1e2430;
+      --error: #ff6b6b;
+      --ok: #4ade80;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    header h1 {
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .conv-badge {
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 4px 8px;
+      border-radius: 6px;
+      color: var(--muted);
+    }
+
+    .conv-badge b {
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    button {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      border-color: var(--accent);
+    }
+
+    button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    main {
+      flex: 1;
+      display: flex;
+      min-height: 0;
+    }
+
+    .chat-col {
+      flex: 1.4;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--border);
+    }
+
+    .log-col {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 280px;
+    }
+
+    .col-title {
+      padding: 8px 14px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+    }
+
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .msg {
+      max-width: 80%;
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .msg.user {
+      background: var(--user);
+      align-self: flex-end;
+      border-bottom-right-radius: 4px;
+    }
+
+    .msg.assistant {
+      background: var(--assistant);
+      align-self: flex-start;
+      border-bottom-left-radius: 4px;
+    }
+
+    .msg.assistant.streaming::after {
+      content: "▍";
+      color: var(--accent);
+      animation: blink 1s infinite;
+    }
+
+    @keyframes blink {
+      50% {
+        opacity: 0;
+      }
+    }
+
+    .msg.error-msg {
+      background: transparent;
+      border: 1px solid var(--error);
+      color: var(--error);
+      align-self: center;
+      font-size: 13px;
+    }
+
+    #eventlog {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 14px;
+      font-family: ui-monospace, monospace;
+      font-size: 11.5px;
+      line-height: 1.7;
+    }
+
+    .evt {
+      margin-bottom: 2px;
+      word-break: break-all;
+    }
+
+    .evt .tag {
+      display: inline-block;
+      min-width: 96px;
+      font-weight: 600;
+    }
+
+    .evt.conversation .tag {
+      color: var(--accent);
+    }
+
+    .evt.text .tag {
+      color: var(--ok);
+    }
+
+    .evt.done .tag {
+      color: #facc15;
+    }
+
+    .evt.error .tag,
+    .evt.fail .tag {
+      color: var(--error);
+    }
+
+    .evt.meta {
+      color: var(--muted);
+    }
+
+    form {
+      display: flex;
+      gap: 8px;
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    input[type="text"] {
+      flex: 1;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: var(--text);
+      font-size: 14px;
+    }
+
+    input[type="text"]:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>SSE Chat Test</h1>
+    <span class="conv-badge">conversation: <b id="conv-id">none (new)</b></span>
+    <button id="reset" type="button">New conversation</button>
+  </header>
+  <main>
+    <div class="chat-col">
+      <div class="col-title">Chat</div>
+      <div id="messages"></div>
+      <form id="chat-form">
+        <input type="text" id="input" placeholder="Type a message…" autocomplete="off" autofocus>
+        <button id="send" type="submit">Send</button>
+      </form>
+    </div>
+    <div class="log-col">
+      <div class="col-title">Event log (raw SSE)</div>
+      <div id="eventlog"></div>
+    </div>
+  </main>
+
+  <script>
+    const API_URL = "http://localhost:8000/chat";
+
+    let conversationId = null;
+
+    const $messages = document.getElementById("messages");
+    const $eventlog = document.getElementById("eventlog");
+    const $input = document.getElementById("input");
+    const $send = document.getElementById("send");
+    const $convId = document.getElementById("conv-id");
+    const $form = document.getElementById("chat-form");
+    const $reset = document.getElementById("reset");
+
+    function logEvent(type, detail) {
+      const div = document.createElement("div");
+      div.className = `evt ${type}`;
+      div.innerHTML = `<span class="tag">${type}</span>`;
+      div.append(detail);
+      $eventlog.append(div);
+      $eventlog.scrollTop = $eventlog.scrollHeight;
+    }
+
+    function addMessage(role, text) {
+      const div = document.createElement("div");
+      div.className = `msg ${role}`;
+      div.textContent = text;
+      $messages.append(div);
+      $messages.scrollTop = $messages.scrollHeight;
+      return div;
+    }
+
+    // Parses an SSE byte stream into {event, data} frames.
+    async function* parseSSE(response) {
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for await (const chunk of response.body) {
+        buffer += decoder.decode(chunk, { stream: true });
+        let sep;
+        while ((sep = buffer.indexOf("\n\n")) !== -1) {
+          const frame = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          let event = "message", data = "";
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event:")) event = line.slice(6).trim();
+            else if (line.startsWith("data:")) data += line.slice(5).trim();
+          }
+          yield { event, data: data ? JSON.parse(data) : {} };
+        }
+      }
+    }
+
+    async function sendMessage(text) {
+      $send.disabled = true;
+      $input.disabled = true;
+      addMessage("user", text);
+      const bubble = addMessage("assistant", "");
+      bubble.classList.add("streaming");
+
+      try {
+        const body = { message: text };
+        if (conversationId) body.conversation_id = conversationId;
+
+        const res = await fetch(API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(`HTTP ${res.status}: ${err.detail}`);
+        }
+
+        for await (const { event, data } of parseSSE(res)) {
+          setTimeout(() => { }, 700)
+          logEvent(event, JSON.stringify(data));
+          switch (event) {
+            case "conversation":
+              conversationId = data.conversation_id;
+              $convId.textContent = conversationId;
+              break;
+            case "text":
+              bubble.textContent += data.content;
+              $messages.scrollTop = $messages.scrollHeight;
+              break;
+            case "done":
+              break;
+            case "error":
+              throw new Error(data.message || "server error event");
+          }
+        }
+      } catch (err) {
+        bubble.remove();
+        addMessage("error-msg", `⚠ ${err.message}`);
+        logEvent("fail", err.message);
+      } finally {
+        bubble.classList.remove("streaming");
+        $send.disabled = false;
+        $input.disabled = false;
+        $input.focus();
+      }
+    }
+
+    $form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const text = $input.value.trim();
+      if (!text) return;
+      $input.value = "";
+      sendMessage(text);
+    });
+
+    $reset.addEventListener("click", () => {
+      conversationId = null;
+      $convId.textContent = "none (new)";
+      $messages.innerHTML = "";
+      logEvent("meta", "— new conversation —");
+    });
+  </script>
+</body>
+
+</html>

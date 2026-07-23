@@ -36,13 +36,17 @@ class GenerationService:
         generation.status = GenerationStatus.STREAMING
         generation.first_token_at = datetime.now(timezone.utc)
 
-    def mark_completed(
+    def complete(
         self,
         generation: Generation,
         assistant_message: Message,
         event: GenerationCompletedEvent,
     ) -> None:
-        if generation.status != GenerationStatus.STREAMING:
+        # allow CREATED too: an empty response completes without a first token
+        if generation.status not in (
+            GenerationStatus.CREATED,
+            GenerationStatus.STREAMING,
+        ):
             raise RuntimeError(
                 f"Cannot mark generation as COMPLETED from {generation.status}"
             )
@@ -55,6 +59,16 @@ class GenerationService:
         if event.usage:
             generation.input_tokens = event.usage.input_tokens
             generation.output_tokens = event.usage.output_tokens
+
+    def fail(self, generation: Generation, message: str) -> None:
+        # terminal setter — must not raise; used on the error path
+        generation.status = GenerationStatus.FAILED
+        generation.error = message
+        generation.completed_at = datetime.now(timezone.utc)
+
+    def cancel(self, generation: Generation) -> None:
+        generation.status = GenerationStatus.CANCELLED
+        generation.completed_at = datetime.now(timezone.utc)
 
 
 generation_service = GenerationService()

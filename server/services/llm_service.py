@@ -1,21 +1,22 @@
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 from anthropic.lib.streaming._types import (
     TextEvent as AnthropicTextEvent,
     ParsedMessageStopEvent,
 )
 from events.llm import TextEvent, GenerationCompletedEvent
-import time
+import asyncio
 import config
 
-client = Anthropic(
+client = AsyncAnthropic(
     api_key=config.ANTHROPIC_API_KEY,
 )
 
+
 class LLMService:
 
-    def stream_mock(self, messages: list[dict]):
+    async def stream_mock(self, messages: list[dict]):
         for word in ["Hello", " ", "World", "!"]:
-            time.sleep(1)
+            await asyncio.sleep(1)
             yield TextEvent(text=word)
 
         yield GenerationCompletedEvent(
@@ -23,13 +24,13 @@ class LLMService:
             usage=None,
         )
 
-    def stream(self, messages: list[dict]):
-        with client.messages.stream(
+    async def stream(self, messages: list[dict]):
+        async with client.messages.stream(
             model=config.LLM_PROVIDER_MODEL,
             max_tokens=1024,
             messages=messages,
         ) as stream:
-            for event in stream:
+            async for event in stream:
                 if isinstance(event, AnthropicTextEvent):
                     yield TextEvent(text=event.text)
                 elif isinstance(event, ParsedMessageStopEvent):

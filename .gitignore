@@ -1,11 +1,11 @@
 # Claude / Playwright captured artifacts
 .playwright-mcp/
+screenshots/
 page-*.png
 page-*.yml
 page-*.jpeg
 console-*.log
-*-test.png
-nextjs-client.png
+.DS_Store
 
 # env
 .env

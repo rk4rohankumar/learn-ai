@@ -25,6 +25,7 @@ export type SSEFrame =
   | { event: "conversation"; data: ConversationEvent }
   | { event: "text"; data: TextPayload }
   | { event: "done"; data: Record<string, never> }
+  | { event: "cancelled"; data: Record<string, never> }
   | { event: "error"; data: ErrorEvent };
 
 export interface ChatMessage {

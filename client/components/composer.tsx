@@ -5,9 +5,11 @@ import { useState } from "react";
 export function Composer({
   disabled,
   onSend,
+  onStop,
 }: {
   disabled: boolean;
   onSend: (text: string) => void;
+  onStop: () => void;
 }) {
   const [text, setText] = useState("");
 
@@ -31,13 +33,23 @@ export function Composer({
         aria-label="Message"
         className="flex-1 rounded-lg border border-edge bg-panel px-3.5 py-2.5 text-sm outline-none focus:border-accent disabled:opacity-50"
       />
-      <button
-        type="submit"
-        disabled={disabled || !text.trim()}
-        className="rounded-lg border border-edge bg-panel px-4 text-sm hover:border-accent disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        Send
-      </button>
+      {disabled ? (
+        <button
+          type="button"
+          onClick={onStop}
+          className="rounded-lg border border-danger/60 bg-panel px-4 text-sm text-danger hover:border-danger"
+        >
+          Stop
+        </button>
+      ) : (
+        <button
+          type="submit"
+          disabled={!text.trim()}
+          className="rounded-lg border border-edge bg-panel px-4 text-sm hover:border-accent disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Send
+        </button>
+      )}
     </form>
   );
 }

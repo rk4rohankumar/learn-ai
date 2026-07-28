@@ -14,6 +14,7 @@ export function Chat() {
     isStreaming,
     error,
     sendMessage,
+    stopGeneration,
     resetConversation,
   } = useChat();
   const [showLog, setShowLog] = useState(true);
@@ -58,7 +59,11 @@ export function Chat() {
               ⚠ {error}
             </p>
           )}
-          <Composer disabled={isStreaming} onSend={sendMessage} />
+          <Composer
+            disabled={isStreaming}
+            onSend={sendMessage}
+            onStop={stopGeneration}
+          />
         </section>
 
         {showLog && (

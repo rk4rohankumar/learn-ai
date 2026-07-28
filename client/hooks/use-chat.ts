@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { parseSSE } from "@/lib/sse";
 import type { ChatMessage, LogEntry } from "@/lib/types";
 
@@ -15,6 +15,8 @@ export function useChat() {
   const [log, setLog] = useState<LogEntry[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // generation currently streaming — the cancel endpoint's address
+  const generationIdRef = useRef<string | null>(null);
 
   const appendLog = useCallback((event: string, data: unknown) => {
     setLog((prev) => [
@@ -63,6 +65,7 @@ export function useChat() {
           switch (frame.event) {
             case "conversation":
               setConversationId(frame.data.conversation_id);
+              generationIdRef.current = frame.data.generation_id;
               break;
             case "text":
               setMessages((prev) =>
@@ -75,6 +78,9 @@ export function useChat() {
               break;
             case "done":
               break;
+            case "cancelled":
+              // partial text stays on screen; stream is about to close
+              break;
             case "error":
               throw new Error(frame.data.message || "server error event");
           }
@@ -85,12 +91,31 @@ export function useChat() {
         appendLog("fail", { message });
         setMessages((prev) => prev.filter((m) => m.id !== assistantId));
       } finally {
+        generationIdRef.current = null;
         patchAssistant({ streaming: false });
+        // a generation cancelled before any text leaves an empty bubble — drop it
+        setMessages((prev) =>
+          prev.filter((m) => !(m.id === assistantId && m.content === "")),
+        );
         setIsStreaming(false);
       }
     },
     [conversationId, appendLog],
   );
+
+  const stopGeneration = useCallback(async () => {
+    const generationId = generationIdRef.current;
+    if (!generationId) return;
+    try {
+      // fire the REQUEST; the stream's `cancelled` event is the fact
+      await fetch(`${API_URL}/generations/${generationId}/cancel`, {
+        method: "POST",
+      });
+      appendLog("meta", { note: `cancel requested for ${generationId}` });
+    } catch {
+      // cancel is best-effort; nothing useful to surface
+    }
+  }, [appendLog]);
 
   const resetConversation = useCallback(() => {
     setConversationId(null);
@@ -106,6 +131,7 @@ export function useChat() {
     isStreaming,
     error,
     sendMessage,
+    stopGeneration,
     resetConversation,
   };
 }

@@ -88,6 +88,13 @@ class GenerationStatus(str, Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
 
+
+TERMINAL_GENERATION_STATUSES = (
+    GenerationStatus.COMPLETED,
+    GenerationStatus.FAILED,
+    GenerationStatus.CANCELLED,
+)
+
 #Generation table
 class Generation(Base):
     __tablename__ = "generations"
@@ -120,6 +127,11 @@ class Generation(Base):
     )
     first_token_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    # cancellation is a REQUEST, orthogonal to the lifecycle — not a status.
+    # only the cancel endpoint writes this; only the runner writes `status`.
+    # single writer per column = no lost-update race between the two.
+    cancel_requested_at = Column(DateTime(timezone=True), nullable=True)
 
     stop_reason = Column(String, nullable=True)
     error = Column(String, nullable=True)

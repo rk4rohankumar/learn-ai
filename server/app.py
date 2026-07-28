@@ -1,9 +1,13 @@
-from fastapi import FastAPI
+from uuid import UUID
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from db import SessionLocal
+from models import TERMINAL_GENERATION_STATUSES
 from schemas import ChatRequest
+from services.generation_service import generation_service
 from runners.generation_runner import generation_runner
 from events.sse import to_sse
 
@@ -35,3 +39,33 @@ async def chat(req: ChatRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.post("/generations/{generation_id}/cancel", status_code=202)
+def cancel_generation(generation_id: UUID):
+    session = SessionLocal()
+    try:
+        generation = generation_service.request_cancel(session, generation_id)
+        if generation is None:
+            raise HTTPException(status_code=404, detail="Generation not found")
+
+        session.commit()
+
+        body = {
+            "generation_id": str(generation.id),
+            "status": generation.status.value,
+            "cancel_requested_at": (
+                generation.cancel_requested_at.isoformat()
+                if generation.cancel_requested_at
+                else None
+            ),
+        }
+
+        # already terminal: nothing to cancel — report the fact, not a promise
+        if generation.status in TERMINAL_GENERATION_STATUSES:
+            return JSONResponse(status_code=200, content=body)
+
+        # 202: the request is accepted; the runner will stop best-effort
+        return body
+    finally:
+        session.close()

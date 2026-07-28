@@ -1,6 +1,13 @@
+import asyncio
+import logging
+import time
 from typing import AsyncIterator, Callable
+from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 import config
 from schemas import ChatRequest
@@ -23,8 +30,44 @@ from events.generation import (
     ToolStarted,
     ToolFinished,
     GenerationCompleted,
+    GenerationCancelled,
     GenerationFailed,
 )
+
+
+class _CancelPoller:
+    """Throttled poll of Generation.cancel_requested_at.
+
+    check() hits the DB at most once per `interval` seconds; force=True
+    bypasses the throttle (used at cheap, rare boundaries: turn start,
+    per tool, final pre-complete check). A positive answer is cached —
+    cancellation never un-happens.
+    """
+
+    def __init__(
+        self,
+        session: Session,
+        generation_id: UUID,
+        interval: float,
+    ) -> None:
+        self._session = session
+        self._generation_id = generation_id
+        self._interval = interval
+        self._last_check = 0.0
+        self._cancelled = False
+
+    def check(self, force: bool = False) -> bool:
+        if self._cancelled:
+            return True
+        now = time.monotonic()
+        if not force and (now - self._last_check) < self._interval:
+            return False
+        self._last_check = now
+        self._cancelled = generation_service.is_cancel_requested(
+            self._session,
+            self._generation_id,
+        )
+        return self._cancelled
 
 
 class GenerationRunner:
@@ -43,11 +86,13 @@ class GenerationRunner:
         self,
         session_factory: "GenerationRunner.SessionFactory",
         max_iterations: int = 10,
+        cancel_poll_interval: float = 0.5,
     ) -> None:
         self._create_session = session_factory
         # safety rail: cap the LLM<->tool loop so a runaway model can't spend
         # unbounded tokens. Not speculative — a NOT NULL for the loop.
         self.max_iterations = max_iterations
+        self.cancel_poll_interval = cancel_poll_interval
 
     async def run(
         self,
@@ -55,6 +100,11 @@ class GenerationRunner:
         req: ChatRequest,
     ) -> AsyncIterator[GenerationEvent]:
         generation = None
+        # hoisted above try: the disconnect arm reads them, and a disconnect
+        # can land on the very first yield, before the loop body ever ran.
+        chunks: list[str] = []
+        conversation_id = None
+
         try:
             # --- setup: everything a real generation needs to exist ---
             conversation = conversation_service.get_or_create_conversation(
@@ -77,7 +127,7 @@ class GenerationRunner:
             generation_id = generation.id
 
             # commit setup so the generation truly exists before we announce it,
-            # and so a failed generation survives a later rollback.
+            # and so a failed/cancelled generation survives a later rollback.
             session.commit()
 
             yield GenerationStarted(
@@ -93,15 +143,25 @@ class GenerationRunner:
                 messages,
                 tool_registry.list_definitions(),
             )
+            poller = _CancelPoller(
+                session,
+                generation_id,
+                self.cancel_poll_interval,
+            )
 
             # --- generation lifecycle: loop LLM <-> tools until done ---
-            chunks: list[str] = []
             started = False
             stop_reason: str | None = None
             usage = None
             completed = False
+            cancelled = False
 
             for _ in range(self.max_iterations):
+                # turn boundary — cheap and rare, so bypass the throttle
+                if poller.check(force=True):
+                    cancelled = True
+                    break
+
                 tool_calls: list[ToolCallEvent] = []
 
                 async for event in llm.stream():
@@ -111,11 +171,19 @@ class GenerationRunner:
                             generation_service.mark_streaming(generation)
                         chunks.append(event.text)
                         yield TextDelta(text=event.text)
+                        # mid-stream — throttled; breaking closes the
+                        # provider stream via the generator's aclose
+                        if poller.check():
+                            cancelled = True
+                            break
                     elif isinstance(event, ToolCallEvent):
                         tool_calls.append(event)
                     elif isinstance(event, MessageStopEvent):
                         stop_reason = event.stop_reason
                         usage = event.usage
+
+                if cancelled:
+                    break
 
                 if not tool_calls:
                     completed = True
@@ -124,6 +192,10 @@ class GenerationRunner:
                 # execute every tool call from this turn, batch results back
                 submissions: list[ToolResultSubmission] = []
                 for call in tool_calls:
+                    if poller.check(force=True):
+                        cancelled = True
+                        break
+
                     yield ToolStarted(
                         id=call.id,
                         name=call.name,
@@ -161,12 +233,36 @@ class GenerationRunner:
                         is_error=is_error,
                     )
 
+                if cancelled:
+                    break
+
                 llm.submit_tool_results(submissions)
 
-            if not completed:
+            if not cancelled and not completed:
                 raise RuntimeError(
                     f"Generation exceeded max_iterations ({self.max_iterations})"
                 )
+
+            if not cancelled:
+                # final check narrows the cancel-vs-complete race window;
+                # a cancel that arrives after this legitimately loses.
+                cancelled = poller.check(force=True)
+
+            if cancelled:
+                assistant_message = None
+                if chunks:
+                    # invariant: a persisted assistant message must be
+                    # non-empty — an empty one corrupts future context.
+                    assistant_message = conversation_service.save_message(
+                        session=session,
+                        conversation_id=conversation_id,
+                        role="assistant",
+                        content="".join(chunks),
+                    )
+                generation_service.cancel(generation, assistant_message)
+                session.commit()
+                yield GenerationCancelled()
+                return
 
             # --- persist completion ---
             assistant_message = conversation_service.save_message(
@@ -185,7 +281,46 @@ class GenerationRunner:
 
             yield GenerationCompleted(stop_reason=stop_reason, usage=usage)
 
+        except (asyncio.CancelledError, GeneratorExit):
+            # implicit termination: client disconnected (tab close, network
+            # drop) — the response task is cancelled at our current yield.
+            # Same terminal path as explicit cancel, but: no yield (the
+            # generator is closing) and ALWAYS re-raise (asyncio contract).
+            session.rollback()
+            if generation is not None:
+                try:
+                    assistant_message = None
+                    if chunks:
+                        assistant_message = conversation_service.save_message(
+                            session=session,
+                            conversation_id=conversation_id,
+                            role="assistant",
+                            content="".join(chunks),
+                        )
+                    generation_service.cancel(generation, assistant_message)
+                    session.commit()
+                except Exception:
+                    session.rollback()
+            raise
+
+        except HTTPException as e:
+            # expected, user-facing errors (e.g. 404 conversation not found) —
+            # safe to forward the detail. NOTE: services raising HTTPException
+            # is a layer leak; a domain exception should replace this later.
+            session.rollback()
+            if generation is not None:
+                try:
+                    generation_service.fail(generation, str(e.detail))
+                    session.commit()
+                except Exception:
+                    session.rollback()
+            yield GenerationFailed(message=str(e.detail))
+
         except Exception as e:
+            # unexpected errors: full detail server-side (log + generation.error),
+            # generic message to the client — raw exception text can leak
+            # connection strings, keys, and paths.
+            logger.exception("generation failed")
             session.rollback()
             if generation is not None:
                 try:
@@ -193,7 +328,7 @@ class GenerationRunner:
                     session.commit()
                 except Exception:
                     session.rollback()
-            yield GenerationFailed(message=str(e))
+            yield GenerationFailed(message="Internal error during generation")
 
         finally:
             session.close()

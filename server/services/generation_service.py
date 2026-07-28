@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from events.llm import GenerationCompletedEvent
 from models import Generation, GenerationStatus, Message
 
 
@@ -40,7 +40,8 @@ class GenerationService:
         self,
         generation: Generation,
         assistant_message: Message,
-        event: GenerationCompletedEvent,
+        stop_reason: str | None,
+        usage: Any = None,
     ) -> None:
         # allow CREATED too: an empty response completes without a first token
         if generation.status not in (
@@ -54,11 +55,11 @@ class GenerationService:
         generation.assistant_message_id = assistant_message.id
         generation.status = GenerationStatus.COMPLETED
         generation.completed_at = datetime.now(timezone.utc)
-        generation.stop_reason = event.stop_reason
+        generation.stop_reason = stop_reason
 
-        if event.usage:
-            generation.input_tokens = event.usage.input_tokens
-            generation.output_tokens = event.usage.output_tokens
+        if usage:
+            generation.input_tokens = usage.input_tokens
+            generation.output_tokens = usage.output_tokens
 
     def fail(self, generation: Generation, message: str) -> None:
         # terminal setter — must not raise; used on the error path

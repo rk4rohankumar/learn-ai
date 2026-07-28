@@ -26,6 +26,22 @@ class TextDelta(GenerationEvent):
 
 
 @dataclass
+class ToolStarted(GenerationEvent):
+    id: str
+    name: str
+    arguments: dict
+
+
+@dataclass
+class ToolFinished(GenerationEvent):
+    id: str
+    name: str
+    status: str
+    content: str
+    is_error: bool
+
+
+@dataclass
 class GenerationCompleted(GenerationEvent):
     stop_reason: str | None
     usage: Any

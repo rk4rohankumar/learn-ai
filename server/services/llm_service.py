@@ -14,6 +14,7 @@ from events.llm import (
     MessageStopEvent,
     ToolResultSubmission,
 )
+from services.prompt_builder import Prompt
 from tools.base import ToolDefinition
 
 client = AsyncAnthropic(
@@ -48,11 +49,15 @@ class LLMSession(ABC):
 class AnthropicLLMSession(LLMSession):
     def __init__(
         self,
-        messages: list[dict],
+        prompt: Prompt,
         tool_definitions: list[ToolDefinition],
     ) -> None:
-        # domain messages: [{"role": "user"/"assistant", "content": str}]
-        self._messages: list[dict] = [dict(m) for m in messages]
+        # translate provider-neutral PromptMessage -> Anthropic wire shape;
+        # this class is the only place that speaks Anthropic
+        self._system = prompt.system
+        self._messages: list[dict] = [
+            {"role": m.role, "content": m.content} for m in prompt.messages
+        ]
         self._tools = [
             {
                 "name": d.name,
@@ -68,6 +73,8 @@ class AnthropicLLMSession(LLMSession):
             max_tokens=1024,
             messages=self._messages,
         )
+        if self._system:
+            kwargs["system"] = self._system
         if self._tools:
             kwargs["tools"] = self._tools
 
@@ -121,10 +128,10 @@ class MockLLMSession(LLMSession):
 
     def __init__(
         self,
-        messages: list[dict],
+        prompt: Prompt,
         tool_definitions: list[ToolDefinition],
     ) -> None:
-        self._messages = list(messages)
+        self._prompt = prompt
         self._results: list[ToolResultSubmission] | None = None
         self._turn = 0
 
@@ -158,17 +165,17 @@ class LLMService:
 
     def create_session(
         self,
-        messages: list[dict],
+        prompt: Prompt,
         tool_definitions: list[ToolDefinition],
     ) -> LLMSession:
-        return AnthropicLLMSession(messages, tool_definitions)
+        return AnthropicLLMSession(prompt, tool_definitions)
 
     def create_mock_session(
         self,
-        messages: list[dict],
+        prompt: Prompt,
         tool_definitions: list[ToolDefinition],
     ) -> LLMSession:
-        return MockLLMSession(messages, tool_definitions)
+        return MockLLMSession(prompt, tool_definitions)
 
 
 llm_service = LLMService()

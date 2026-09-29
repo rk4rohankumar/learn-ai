@@ -5,17 +5,20 @@ import { useChat } from "@/hooks/use-chat";
 import { MessageList } from "./message-list";
 import { Composer } from "./composer";
 import { EventLog } from "./event-log";
+import { Sidebar } from "./sidebar";
 
 export function Chat() {
   const {
     messages,
     conversationId,
+    conversations,
     log,
     isStreaming,
     error,
     sendMessage,
     stopGeneration,
     resetConversation,
+    selectConversation,
   } = useChat();
   const [showLog, setShowLog] = useState(true);
 
@@ -37,18 +40,17 @@ export function Chat() {
           >
             {showLog ? "Hide events" : "Show events"}
           </button>
-          <button
-            type="button"
-            onClick={resetConversation}
-            disabled={isStreaming}
-            className="rounded-md border border-edge bg-panel px-3 py-1.5 text-[13px] hover:border-accent disabled:opacity-40"
-          >
-            New conversation
-          </button>
         </div>
       </header>
 
       <main className="flex min-h-0 flex-1">
+        <Sidebar
+          conversations={conversations}
+          activeId={conversationId}
+          disabled={isStreaming}
+          onSelect={selectConversation}
+          onNew={resetConversation}
+        />
         <section className="flex min-w-0 flex-[1.4] flex-col">
           <MessageList messages={messages} />
           {error && (

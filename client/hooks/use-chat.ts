@@ -1,8 +1,13 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { parseSSE } from "@/lib/sse";
-import type { ChatMessage, LogEntry } from "@/lib/types";
+import type {
+  ChatMessage,
+  ConversationSummary,
+  LogEntry,
+  MessageOut,
+} from "@/lib/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -15,8 +20,36 @@ export function useChat() {
   const [log, setLog] = useState<LogEntry[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   // generation currently streaming — the cancel endpoint's address
   const generationIdRef = useRef<string | null>(null);
+
+  const refreshConversations = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/conversations`);
+      if (res.ok) setConversations(await res.json());
+    } catch {
+      // list is a convenience; chat still works without it
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshConversations();
+  }, [refreshConversations]);
+
+  const selectConversation = useCallback(async (id: string) => {
+    const res = await fetch(`${API_URL}/conversations/${id}/messages`);
+    if (!res.ok) {
+      setError(`Failed to load conversation (HTTP ${res.status})`);
+      return;
+    }
+    const history: MessageOut[] = await res.json();
+    setMessages(
+      history.map((m) => ({ id: m.id, role: m.role, content: m.content })),
+    );
+    setConversationId(id);
+    setError(null);
+  }, []);
 
   const appendLog = useCallback((event: string, data: unknown) => {
     setLog((prev) => [
@@ -98,9 +131,10 @@ export function useChat() {
           prev.filter((m) => !(m.id === assistantId && m.content === "")),
         );
         setIsStreaming(false);
+        refreshConversations(); // a new conversation may have been created
       }
     },
-    [conversationId, appendLog],
+    [conversationId, appendLog, refreshConversations],
   );
 
   const stopGeneration = useCallback(async () => {
@@ -127,11 +161,13 @@ export function useChat() {
   return {
     messages,
     conversationId,
+    conversations,
     log,
     isStreaming,
     error,
     sendMessage,
     stopGeneration,
     resetConversation,
+    selectConversation,
   };
 }

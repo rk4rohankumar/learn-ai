@@ -5,8 +5,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from db import SessionLocal
-from models import TERMINAL_GENERATION_STATUSES
-from schemas import ChatRequest
+from models import Conversation, TERMINAL_GENERATION_STATUSES
+from schemas import ChatRequest, ConversationSummary, MessageOut
+from services.conversation_service import conversation_service
 from services.generation_service import generation_service
 from runners.generation_runner import generation_runner
 from events.sse import to_sse
@@ -39,6 +40,30 @@ async def chat(req: ChatRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.get("/conversations", response_model=list[ConversationSummary])
+def list_conversations():
+    session = SessionLocal()
+    try:
+        # no user concept yet — everything comes back; auth scopes this later
+        return conversation_service.list_conversations(session)
+    finally:
+        session.close()
+
+
+@app.get(
+    "/conversations/{conversation_id}/messages",
+    response_model=list[MessageOut],
+)
+def get_conversation_messages(conversation_id: UUID):
+    session = SessionLocal()
+    try:
+        if session.get(Conversation, conversation_id) is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return conversation_service.get_messages(session, conversation_id)
+    finally:
+        session.close()
 
 
 @app.post("/generations/{generation_id}/cancel", status_code=202)

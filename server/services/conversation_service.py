@@ -45,29 +45,26 @@ class ConversationService:
 
         return message
     
-    def build_messages(
+    def get_messages(
         self,
         session: Session,
         conversation_id: UUID,
-    ):
-        history = (
-        session.query(Message)
-        .filter(Message.conversation_id==conversation_id)
-        .order_by(Message.created_at)
-        .all()
-        )
-        
-        messages = []
-
-        for msg in history:
-            messages.append(
-            {
-                "role": msg.role,
-                "content": msg.content,
-            }
+    ) -> list[Message]:
+        # pure fetch — assembly policy lives in PromptBuilder
+        return (
+            session.query(Message)
+            .filter(Message.conversation_id == conversation_id)
+            .order_by(Message.created_at)
+            .all()
         )
 
-        return messages
+    def list_conversations(self, session: Session) -> list[Conversation]:
+        # no user concept yet — returns everything; auth scopes this later
+        return (
+            session.query(Conversation)
+            .order_by(Conversation.created_at.desc())
+            .all()
+        )
 
 
 conversation_service = ConversationService()

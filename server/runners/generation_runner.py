@@ -14,6 +14,7 @@ from schemas import ChatRequest
 from services.conversation_service import conversation_service
 from services.generation_service import generation_service
 from services.llm_service import llm_service, LLMSession
+from services.prompt_builder import prompt_builder, Prompt
 from tools.base import ToolDefinition
 from tools.registry import tool_registry
 from tools.execution import ToolExecutionStatus
@@ -78,9 +79,9 @@ class GenerationRunner:
     formats. Yields application-level GenerationEvents.
     """
 
-    # a factory (messages, tool_definitions) -> LLMSession. Injected so the
+    # a factory (prompt, tool_definitions) -> LLMSession. Injected so the
     # runner never decides Anthropic-vs-mock — the caller supplies the session.
-    SessionFactory = Callable[[list[dict], list[ToolDefinition]], LLMSession]
+    SessionFactory = Callable[[Prompt, list[ToolDefinition]], LLMSession]
 
     def __init__(
         self,
@@ -135,12 +136,15 @@ class GenerationRunner:
                 generation_id=generation_id,
             )
 
-            messages = conversation_service.build_messages(
+            # persistence-first invariant: the user message is already saved,
+            # so the prompt is built purely from persisted state (replayable)
+            history = conversation_service.get_messages(
                 session,
                 conversation_id,
             )
+            prompt = prompt_builder.build(history)
             llm = self._create_session(
-                messages,
+                prompt,
                 tool_registry.list_definitions(),
             )
             poller = _CancelPoller(

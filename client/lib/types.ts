@@ -35,6 +35,20 @@ export interface ChatMessage {
   streaming?: boolean;
 }
 
+// GET /conversations
+export interface ConversationSummary {
+  id: string;
+  created_at: string;
+}
+
+// GET /conversations/{id}/messages
+export interface MessageOut {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+}
+
 export interface LogEntry {
   id: string;
   event: string;

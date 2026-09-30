@@ -9,7 +9,7 @@ import { Sidebar } from "./sidebar";
 
 export function Chat() {
   const {
-    messages,
+    items,
     conversationId,
     conversations,
     log,
@@ -52,7 +52,7 @@ export function Chat() {
           onNew={resetConversation}
         />
         <section className="flex min-w-0 flex-[1.4] flex-col">
-          <MessageList messages={messages} />
+          <MessageList items={items} />
           {error && (
             <p
               role="alert"

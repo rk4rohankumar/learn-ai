@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { parseSSE } from "@/lib/sse";
 import type {
-  ChatMessage,
+  ChatItem,
   ConversationSummary,
   LogEntry,
   MessageOut,
@@ -15,7 +15,7 @@ let nextId = 0;
 const uid = () => String(++nextId);
 
 export function useChat() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [items, setItems] = useState<ChatItem[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [log, setLog] = useState<LogEntry[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -44,8 +44,14 @@ export function useChat() {
       return;
     }
     const history: MessageOut[] = await res.json();
-    setMessages(
-      history.map((m) => ({ id: m.id, role: m.role, content: m.content })),
+    // history persists only user/assistant text; tool traces aren't stored
+    setItems(
+      history.map((m) => ({
+        kind: "message" as const,
+        id: m.id,
+        role: m.role,
+        content: m.content,
+      })),
     );
     setConversationId(id);
     setError(null);
@@ -63,17 +69,24 @@ export function useChat() {
       setError(null);
       setIsStreaming(true);
 
-      const assistantId = uid();
-      setMessages((prev) => [
+      setItems((prev) => [
         ...prev,
-        { id: uid(), role: "user", content: text },
-        { id: assistantId, role: "assistant", content: "", streaming: true },
+        { kind: "message", id: uid(), role: "user", content: text },
       ]);
 
-      const patchAssistant = (patch: Partial<ChatMessage>) =>
-        setMessages((prev) =>
-          prev.map((m) => (m.id === assistantId ? { ...m, ...patch } : m)),
-        );
+      // The assistant bubble is created lazily on the first text delta of each
+      // contiguous run. A tool call breaks the run (resets this to null), so
+      // tool cards land BETWEEN text segments in true arrival order.
+      let assistantId: string | null = null;
+
+      const startAssistant = () => {
+        assistantId = uid();
+        const id = assistantId;
+        setItems((prev) => [
+          ...prev,
+          { kind: "message", id, role: "assistant", content: "", streaming: true },
+        ]);
+      };
 
       try {
         const res = await fetch(`${API_URL}/chat`, {
@@ -100,12 +113,43 @@ export function useChat() {
               setConversationId(frame.data.conversation_id);
               generationIdRef.current = frame.data.generation_id;
               break;
-            case "text":
-              setMessages((prev) =>
+            case "text": {
+              if (assistantId === null) startAssistant();
+              const id = assistantId;
+              setItems((prev) =>
                 prev.map((m) =>
-                  m.id === assistantId
+                  m.kind === "message" && m.id === id
                     ? { ...m, content: m.content + frame.data.content }
                     : m,
+                ),
+              );
+              break;
+            }
+            case "tool_started":
+              // ends the current text run — the next text opens a new bubble
+              assistantId = null;
+              setItems((prev) => [
+                ...prev,
+                {
+                  kind: "tool",
+                  id: frame.data.id,
+                  name: frame.data.name,
+                  arguments: frame.data.arguments,
+                  status: "running",
+                },
+              ]);
+              break;
+            case "tool_finished":
+              setItems((prev) =>
+                prev.map((it) =>
+                  it.kind === "tool" && it.id === frame.data.id
+                    ? {
+                        ...it,
+                        status: frame.data.is_error ? "error" : "completed",
+                        content: frame.data.content,
+                        isError: frame.data.is_error,
+                      }
+                    : it,
                 ),
               );
               break;
@@ -122,13 +166,25 @@ export function useChat() {
         const message = err instanceof Error ? err.message : String(err);
         setError(message);
         appendLog("fail", { message });
-        setMessages((prev) => prev.filter((m) => m.id !== assistantId));
       } finally {
         generationIdRef.current = null;
-        patchAssistant({ streaming: false });
-        // a generation cancelled before any text leaves an empty bubble — drop it
-        setMessages((prev) =>
-          prev.filter((m) => !(m.id === assistantId && m.content === "")),
+        setItems((prev) =>
+          prev
+            // a bubble opened but never filled (cancel/error before text) — drop it
+            .filter(
+              (it) =>
+                !(
+                  it.kind === "message" &&
+                  it.role === "assistant" &&
+                  it.content === ""
+                ),
+            )
+            // clear any leftover streaming cursor
+            .map((it) =>
+              it.kind === "message" && it.streaming
+                ? { ...it, streaming: false }
+                : it,
+            ),
         );
         setIsStreaming(false);
         refreshConversations(); // a new conversation may have been created
@@ -153,13 +209,13 @@ export function useChat() {
 
   const resetConversation = useCallback(() => {
     setConversationId(null);
-    setMessages([]);
+    setItems([]);
     setError(null);
     appendLog("meta", { note: "new conversation" });
   }, [appendLog]);
 
   return {
-    messages,
+    items,
     conversationId,
     conversations,
     log,
